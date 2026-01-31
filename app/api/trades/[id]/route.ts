@@ -16,15 +16,12 @@ async function sendPushToUser(args: {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
-  // Supabase Functions endpoint:
-  // https://<project-ref>.supabase.co/functions/v1/<function-name>
   const url = `${supabaseUrl}/functions/v1/send-push`
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      // both are commonly required
       Authorization: `Bearer ${serviceRole}`,
       apikey: serviceRole,
     },
@@ -40,30 +37,28 @@ async function sendPushToUser(args: {
   return json
 }
 
-// (Optional) create in-app notification row
+// ✅ Create in-app notification row (matches your notifications table)
 async function createInAppNotification(payload: {
   user_id: string
-  title: string
-  body: string
   type: 'trade'
-  meta?: Record<string, any>
+  title: string
+  message: string
+  data?: Record<string, any>
 }) {
-  // If you don't have this table yet, this will fail.
-  // We catch it so the trade update still succeeds.
+  // If anything goes wrong, we don't block the trade update
   try {
-    await supabase.from('notifications').insert({
+    const { error } = await supabase.from('notifications').insert({
       user_id: payload.user_id,
-      title: payload.title,
-      body: payload.body,
       type: payload.type,
-      meta: payload.meta ?? {},
+      title: payload.title,
+      message: payload.message,
+      data: payload.data ?? {},
       is_read: false,
     })
+
+    if (error) throw error
   } catch (e) {
-    console.warn(
-      'notifications insert skipped (table/columns may not exist):',
-      e
-    )
+    console.warn('notifications insert failed (non-blocking):', e)
   }
 }
 
@@ -99,10 +94,12 @@ export async function PATCH(
     )
   }
 
-  // ✅ Step 1: Fetch trade details (need user_id, total, card_name)
+  // ✅ Step 1: Fetch trade details (need user_id, total, card_name etc.)
   const { data: trade, error: tradeError } = await supabase
     .from('trades')
-    .select('id, user_id, total, status, card_name, amount_usd')
+    .select(
+      'id, user_id, total, status, card_name, amount_usd, rate, created_at'
+    )
     .eq('id', id)
     .single()
 
@@ -113,9 +110,10 @@ export async function PATCH(
     })
   }
 
-  // ✅ Step 2: Build trade update payload (reason + proofs only when rejected)
+  // ✅ Step 2: Build trade update payload
   const tradeUpdate: Record<string, any> = { status: normalizedStatus }
 
+  // Only attach these fields when rejecting
   if (normalizedStatus === 'rejected') {
     if (reason) tradeUpdate.reject_reason = reason
     if (Array.isArray(proof_images)) tradeUpdate.proof_images = proof_images
@@ -148,7 +146,7 @@ export async function PATCH(
       })
     }
 
-    const newBalance = (profile.balance || 0) + (trade.total || 0)
+    const newBalance = Number(profile.balance || 0) + Number(trade.total || 0)
 
     const { error: balanceError } = await supabase
       .from('profiles')
@@ -163,7 +161,7 @@ export async function PATCH(
     }
   }
 
-  // ✅ Step 4: Create in-app notification + send push
+  // ✅ Step 4: Build notification payload
   const title =
     normalizedStatus === 'approved'
       ? '✅ Trade Approved'
@@ -182,33 +180,40 @@ export async function PATCH(
         }`
       : `Your trade status is now ${normalizedStatus}.`
 
-  const meta = {
-    kind: 'trade',
-    trade_id: trade.id,
+  // ✅ THIS is what your app needs to fetch full details
+  // Store the trade id inside notifications.data
+  const dataForNotification = {
+    entity: 'trade',
+    id: trade.id,
+
+    // Optional helpful fields (lets UI show instantly even before extra fetch)
     status: normalizedStatus,
     card_name: trade.card_name,
-    total: trade.total,
     amount_usd: trade.amount_usd,
+    rate: trade.rate,
+    total: trade.total,
+
+    // Rejection extras
     ...(reason ? { reason } : {}),
     ...(Array.isArray(proof_images) ? { proof_images } : {}),
   }
 
-  // In-app notification (safe try)
+  // ✅ In-app notifications table insert
   await createInAppNotification({
     user_id: trade.user_id,
-    title,
-    body: message,
     type: 'trade',
-    meta,
+    title,
+    message,
+    data: dataForNotification,
   })
 
-  // Push (don’t fail the request if push fails)
+  // ✅ Push notification (non-blocking)
   try {
     await sendPushToUser({
       user_id: trade.user_id,
       title,
       body: message,
-      data: meta,
+      data: dataForNotification,
     })
   } catch (e) {
     console.warn('Push failed but trade update succeeded:', e)

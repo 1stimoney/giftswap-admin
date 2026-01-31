@@ -84,7 +84,7 @@ export default function AdminLayout({
       <AdminRealtimeListener />
 
       {/* ✅ Global Toast UI */}
-      <Toaster richColors position='top-right' />
+      <Toaster richColors position='bottom-right' />
 
       {/* ✅ Admin content */}
       {/* Sidebar */}
