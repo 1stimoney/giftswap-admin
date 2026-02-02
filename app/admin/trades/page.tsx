@@ -27,23 +27,42 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 
-import { Loader2, Search, Image as ImageIcon, X } from 'lucide-react'
+import {
+  Loader2,
+  Search,
+  Image as ImageIcon,
+  X,
+  Copy,
+  Eye,
+  ShieldAlert,
+} from 'lucide-react'
+
+type TradeType = 'physical' | 'ecode'
 
 interface Trade {
   id: string
   user_id: string
   user_name: string
   user_email: string
+
+  // Gift card info
   card_name: string
   rate: number
   amount_usd: number
   total: number
+
+  // NEW: how the user submitted it
+  trade_type?: TradeType | string | null // physical | ecode
+  card_code?: string | null // ecode code (or optional code for physical)
+
+  // images (physical)
   image_url?: string
   image_urls?: string[] | string
+
   status: string
   created_at: string
 
-  // optional fields we’ll start sending
+  // reject fields
   reason?: string | null
   proof_images?: string[] | string | null
 }
@@ -66,6 +85,15 @@ export default function TradesPage() {
   const [proofFiles, setProofFiles] = useState<File[]>([])
   const [submittingReject, setSubmittingReject] = useState(false)
 
+  // Code modal
+  const [codeOpen, setCodeOpen] = useState(false)
+  const [codeTrade, setCodeTrade] = useState<Trade | null>(null)
+
+  const normalizeType = (t?: string | null): TradeType => {
+    const s = String(t || '').toLowerCase()
+    return s === 'ecode' ? 'ecode' : 'physical'
+  }
+
   // ✅ Fetch trades from API
   const fetchTrades = async () => {
     try {
@@ -84,7 +112,7 @@ export default function TradesPage() {
   }
 
   // ✅ Upload proof images (multiple) to Supabase Storage
-  // Bucket name: trade-proofs (change if yours differs)
+  // Bucket name: trade-images (as you said)
   const uploadProofImages = async (trade: Trade, files: File[]) => {
     const urls: string[] = []
     if (!files.length) return urls
@@ -176,6 +204,20 @@ export default function TradesPage() {
     return trade.image_url ? [trade.image_url] : []
   }
 
+  // ✅ Parse proof images
+  const parseProofUrls = (trade: Trade): string[] => {
+    try {
+      if (Array.isArray(trade.proof_images)) return trade.proof_images
+      if (typeof trade.proof_images === 'string') {
+        const parsed = JSON.parse(trade.proof_images)
+        if (Array.isArray(parsed)) return parsed
+      }
+    } catch {
+      // ignore
+    }
+    return []
+  }
+
   // ✅ Subscribe to realtime changes
   useEffect(() => {
     fetchTrades()
@@ -243,6 +285,9 @@ export default function TradesPage() {
           t.status,
           String(t.amount_usd),
           String(t.total),
+          String(t.rate),
+          String(t.trade_type || ''),
+          String(t.card_code || ''), // allow searching code in admin
         ]
           .join(' ')
           .toLowerCase()
@@ -276,6 +321,19 @@ export default function TradesPage() {
     return (
       <Badge className='bg-yellow-100 text-yellow-700 hover:bg-yellow-100'>
         PENDING
+      </Badge>
+    )
+  }
+
+  const typeBadge = (t?: string | null) => {
+    const tt = normalizeType(t)
+    return tt === 'ecode' ? (
+      <Badge className='bg-blue-100 text-blue-700 hover:bg-blue-100'>
+        E-CODE
+      </Badge>
+    ) : (
+      <Badge className='bg-slate-100 text-slate-700 hover:bg-slate-100'>
+        PHYSICAL
       </Badge>
     )
   }
@@ -325,6 +383,20 @@ export default function TradesPage() {
     }
   }
 
+  const openCodeModal = (t: Trade) => {
+    setCodeTrade(t)
+    setCodeOpen(true)
+  }
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success('Copied')
+    } catch {
+      toast.error('Copy failed')
+    }
+  }
+
   if (loading)
     return (
       <div className='min-h-[60vh] flex items-center justify-center'>
@@ -346,7 +418,8 @@ export default function TradesPage() {
         <div>
           <h1 className='text-2xl font-semibold tracking-tight'>Trades</h1>
           <p className='text-sm text-muted-foreground'>
-            Manage trade requests, verify images, approve or reject with proof.
+            Approve / reject trades. Physical trades have images; E-code trades
+            have a code.
           </p>
         </div>
 
@@ -355,7 +428,7 @@ export default function TradesPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder='Search user, email, card, status...'
+            placeholder='Search user, email, card, status, type, code...'
             className='pl-9'
           />
         </div>
@@ -408,12 +481,14 @@ export default function TradesPage() {
                           <TableHead>User</TableHead>
                           <TableHead>Email</TableHead>
                           <TableHead>Card</TableHead>
+                          <TableHead>Type</TableHead>
                           <TableHead className='text-right'>Rate</TableHead>
                           <TableHead className='text-right'>USD</TableHead>
                           <TableHead className='text-right'>NGN</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Date</TableHead>
                           <TableHead>Images</TableHead>
+                          <TableHead>Code</TableHead>
                           <TableHead className='text-right'>Action</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -421,6 +496,7 @@ export default function TradesPage() {
                       <TableBody>
                         {filtered.map((trade) => {
                           const images = parseImageUrls(trade)
+                          const tt = normalizeType(trade.trade_type)
 
                           return (
                             <TableRow key={trade.id} className='align-top'>
@@ -429,6 +505,11 @@ export default function TradesPage() {
                               </TableCell>
                               <TableCell>{trade.user_email}</TableCell>
                               <TableCell>{trade.card_name}</TableCell>
+
+                              <TableCell>
+                                {typeBadge(trade.trade_type)}
+                              </TableCell>
+
                               <TableCell className='text-right'>
                                 {trade.rate}
                               </TableCell>
@@ -438,13 +519,16 @@ export default function TradesPage() {
                               <TableCell className='text-right font-semibold'>
                                 {trade.total}
                               </TableCell>
+
                               <TableCell>{statusBadge(trade.status)}</TableCell>
+
                               <TableCell className='text-muted-foreground'>
                                 {new Date(trade.created_at).toLocaleString()}
                               </TableCell>
 
+                              {/* Images: only expected for physical */}
                               <TableCell>
-                                {images.length > 0 ? (
+                                {tt === 'physical' && images.length > 0 ? (
                                   <div className='flex gap-2 overflow-x-auto max-w-[220px]'>
                                     {images.slice(0, 6).map((url, i) => (
                                       <button
@@ -468,11 +552,37 @@ export default function TradesPage() {
                                       </div>
                                     ) : null}
                                   </div>
-                                ) : (
+                                ) : tt === 'physical' ? (
                                   <div className='flex items-center gap-2 text-muted-foreground'>
                                     <ImageIcon className='h-4 w-4' />
                                     <span className='text-sm'>No image</span>
                                   </div>
+                                ) : (
+                                  <div className='flex items-center gap-2 text-muted-foreground'>
+                                    <ShieldAlert className='h-4 w-4' />
+                                    <span className='text-sm'>
+                                      E-code trade
+                                    </span>
+                                  </div>
+                                )}
+                              </TableCell>
+
+                              {/* Code column */}
+                              <TableCell>
+                                {trade.card_code ? (
+                                  <Button
+                                    variant='outline'
+                                    size='sm'
+                                    className='gap-2'
+                                    onClick={() => openCodeModal(trade)}
+                                  >
+                                    <Eye className='h-4 w-4' />
+                                    View
+                                  </Button>
+                                ) : (
+                                  <span className='text-sm text-muted-foreground'>
+                                    —
+                                  </span>
                                 )}
                               </TableCell>
 
@@ -535,6 +645,68 @@ export default function TradesPage() {
         </DialogContent>
       </Dialog>
 
+      {/* 🔐 Code Modal */}
+      <Dialog open={codeOpen} onOpenChange={setCodeOpen}>
+        <DialogContent className='max-w-2xl'>
+          <DialogHeader>
+            <DialogTitle>Gift Card Code</DialogTitle>
+          </DialogHeader>
+
+          <div className='space-y-3'>
+            <div className='rounded-lg border p-3 bg-muted/30'>
+              <div className='text-sm font-medium'>
+                {codeTrade?.user_name}{' '}
+                <span className='text-muted-foreground'>
+                  ({codeTrade?.user_email})
+                </span>
+              </div>
+              <div className='text-sm text-muted-foreground mt-1 flex flex-wrap gap-2 items-center'>
+                <span>{codeTrade?.card_name}</span>
+                <span>•</span>
+                <span className='font-medium'>${codeTrade?.amount_usd}</span>
+                <span>•</span>
+                <span className='font-medium'>₦{codeTrade?.total}</span>
+                <span className='ml-2'>
+                  {typeBadge(codeTrade?.trade_type || null)}
+                </span>
+              </div>
+            </div>
+
+            <div className='rounded-xl border bg-background p-3'>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='text-xs text-muted-foreground'>CODE</div>
+                {codeTrade?.card_code ? (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    className='gap-2'
+                    onClick={() => copyToClipboard(codeTrade.card_code!)}
+                  >
+                    <Copy className='h-4 w-4' />
+                    Copy
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className='mt-2 font-mono text-sm whitespace-pre-wrap break-words'>
+                {codeTrade?.card_code || '—'}
+              </div>
+            </div>
+
+            <p className='text-xs text-muted-foreground'>
+              This code is visible only to admins. (If you want, we can also
+              mask it by default and add “Reveal”.)
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant='outline' onClick={() => setCodeOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ❌ Reject Modal (Reason + Multiple Proof Images) */}
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
         <DialogContent className='max-w-2xl'>
@@ -550,9 +722,26 @@ export default function TradesPage() {
                   ({rejectTrade?.user_email})
                 </span>
               </div>
-              <div className='text-sm text-muted-foreground mt-1'>
-                {rejectTrade?.card_name} • ${rejectTrade?.amount_usd} • ₦
-                {rejectTrade?.total}
+              <div className='text-sm text-muted-foreground mt-1 flex flex-wrap gap-2 items-center'>
+                <span>
+                  {rejectTrade?.card_name} • ${rejectTrade?.amount_usd} • ₦
+                  {rejectTrade?.total}
+                </span>
+                <span className='ml-2'>
+                  {typeBadge(rejectTrade?.trade_type || null)}
+                </span>
+                {rejectTrade?.card_code ? (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    className='ml-2 gap-2'
+                    onClick={() => rejectTrade && openCodeModal(rejectTrade)}
+                  >
+                    <Eye className='h-4 w-4' />
+                    View code
+                  </Button>
+                ) : null}
               </div>
             </div>
 
