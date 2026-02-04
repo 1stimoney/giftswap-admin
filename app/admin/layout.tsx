@@ -11,6 +11,7 @@ import {
   CreditCard,
   ArrowDownCircle,
   DollarSign,
+  MessageCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
@@ -24,6 +25,7 @@ const navItems = [
   { name: 'Trades', icon: CreditCard, href: '/admin/trades' },
   { name: 'Withdrawals', icon: ArrowDownCircle, href: '/admin/withdrawal' },
   { name: 'Users', icon: Users, href: '/admin/users' },
+  { name: 'Support', icon: MessageCircle, href: '/admin/support' },
 ]
 
 export default function AdminLayout({
